@@ -36,7 +36,7 @@ use syntax::attr;
 use syntax::diagnostic::span_handler;
 use syntax::parse::token::{StringRef, ident_interner, special_idents};
 use syntax::print::pprust;
-use syntax::{ast, ast_util};
+use syntax::ast;
 use syntax::codemap;
 
 type cmd = @crate_metadata;
