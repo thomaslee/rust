@@ -197,7 +197,7 @@ fn item_def_id(d: ebml::Doc, cdata: cmd) -> ast::def_id {
 }
 
 #[cfg(stage0)]
-fn each_reexport(d: ebml::Doc, f: &fn(ebml::Doc) -> bool) {
+fn _each_reexport(d: ebml::Doc, f: &fn(ebml::Doc) -> bool) {
     for reader::tagged_docs(d, tag_items_data_item_reexport) |reexport_doc| {
         if !f(reexport_doc) {
             return;
@@ -205,7 +205,7 @@ fn each_reexport(d: ebml::Doc, f: &fn(ebml::Doc) -> bool) {
     }
 }
 #[cfg(not(stage0))]
-fn each_reexport(d: ebml::Doc, f: &fn(ebml::Doc) -> bool) -> bool {
+fn _each_reexport(d: ebml::Doc, f: &fn(ebml::Doc) -> bool) -> bool {
     for reader::tagged_docs(d, tag_items_data_item_reexport) |reexport_doc| {
         if !f(reexport_doc) {
             return false;
@@ -499,6 +499,62 @@ pub fn each_lang_item(cdata: cmd, f: &fn(ast::node_id, uint) -> bool) -> bool {
     return true;
 }
 
+fn each_reexport(cdata:cmd, get_crate_data: GetCrateDataCb,
+                 items: ebml::Doc, path: ~str, item_doc: ebml::Doc,
+                 f: &fn(&str, def_like) -> bool) -> bool {
+    for _each_reexport(item_doc) |reexport_doc| {
+        let def_id_doc =
+            reader::get_doc(reexport_doc,
+                tag_items_data_item_reexport_def_id);
+        let def_id =
+            reader::with_doc_data(def_id_doc,
+                                  |d| parse_def_id(d));
+        let def_id = translate_def_id(cdata, def_id);
+
+        let reexport_name_doc =
+            reader::get_doc(reexport_doc,
+                          tag_items_data_item_reexport_name);
+        let reexport_name = reader::doc_as_str(reexport_name_doc);
+
+        let reexport_path;
+        if path.is_empty() {
+            reexport_path = reexport_name;
+        } else {
+            reexport_path = path + ~"::" + reexport_name;
+        }
+
+        // This reexport may be in yet another crate
+        let other_crates_items = if def_id.crate == cdata.cnum {
+            items
+        } else {
+            let crate_data = get_crate_data(def_id.crate);
+            let root = reader::Doc(crate_data.data);
+            reader::get_doc(root, tag_items)
+        };
+
+        // Get the item.
+        match maybe_find_item(def_id.node, other_crates_items) {
+            None => {}
+            Some(item_doc) => {
+                // Construct the def for this item.
+                let def_like = item_to_def_like(item_doc,
+                                                def_id,
+                                                cdata.cnum);
+
+                // Hand the information off to the iteratee.
+                debug!("(each_reexport) yielding reexported \
+                        item: %s", reexport_path);
+
+                if (!f(reexport_path, def_like)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 /// Iterates over all the paths in the given crate.
 pub fn _each_path(intr: @ident_interner, cdata: cmd,
                   get_crate_data: GetCrateDataCb,
@@ -507,92 +563,42 @@ pub fn _each_path(intr: @ident_interner, cdata: cmd,
     let items = reader::get_doc(root, tag_items);
     let items_data = reader::get_doc(items, tag_items_data);
 
-    let mut broken = false;
-
     // First, go through all the explicit items.
     for reader::tagged_docs(items_data, tag_items_data_item) |item_doc| {
-        if !broken {
-            let path = ast_map::path_to_str_with_sep(
-                item_path(intr, item_doc), ~"::", intr);
-            let path_is_empty = path.is_empty();
-            if !path_is_empty {
-                // Extract the def ID.
-                let def_id = item_def_id(item_doc, cdata);
+        let path = ast_map::path_to_str(item_path(intr, item_doc), intr);
+        let path_is_empty = path.is_empty();
+        if !path_is_empty {
+            // Extract the def ID.
+            let def_id = item_def_id(item_doc, cdata);
 
-                // Construct the def for this item.
-                debug!("(each_path) yielding explicit item: %s", path);
-                let def_like = item_to_def_like(item_doc, def_id, cdata.cnum);
+            // Construct the def for this item.
+            debug!("(each_path) yielding explicit item: %s", path);
+            let def_like = item_to_def_like(item_doc, def_id, cdata.cnum);
 
-                // Hand the information off to the iteratee.
-                if !f(path, def_like) {
-                    broken = true;      // FIXME #4572: This is awful.
-                }
+            // Hand the information off to the iteratee.
+            if !f(path, def_like) {
+                return true;
             }
+        }
 
-            // If this is a module, find the reexports.
-            for each_reexport(item_doc) |reexport_doc| {
-                if !broken {
-                    let def_id_doc =
-                        reader::get_doc(reexport_doc,
-                            tag_items_data_item_reexport_def_id);
-                    let def_id =
-                        reader::with_doc_data(def_id_doc,
-                                              |d| parse_def_id(d));
-                    let def_id = translate_def_id(cdata, def_id);
-
-                    let reexport_name_doc =
-                        reader::get_doc(reexport_doc,
-                                      tag_items_data_item_reexport_name);
-                    let reexport_name = reader::doc_as_str(reexport_name_doc);
-
-                    let reexport_path;
-                    if path_is_empty {
-                        reexport_path = reexport_name;
-                    } else {
-                        reexport_path = path + ~"::" + reexport_name;
-                    }
-
-                    // This reexport may be in yet another crate
-                    let other_crates_items = if def_id.crate == cdata.cnum {
-                        items
-                    } else {
-                        let crate_data = get_crate_data(def_id.crate);
-                        let root = reader::Doc(crate_data.data);
-                        reader::get_doc(root, tag_items)
-                    };
-
-                    // Get the item.
-                    match maybe_find_item(def_id.node, other_crates_items) {
-                        None => {}
-                        Some(item_doc) => {
-                            // Construct the def for this item.
-                            let def_like = item_to_def_like(item_doc,
-                                                            def_id,
-                                                            cdata.cnum);
-
-                            // Hand the information off to the iteratee.
-                            debug!("(each_path) yielding reexported \
-                                    item: %s", reexport_path);
-
-                            if (!f(reexport_path, def_like)) {
-                                broken = true;  // FIXME #4572: This is awful.
-                            }
-                        }
-                    }
-                }
-            }
+        if each_reexport(cdata, get_crate_data, items, path, item_doc, f) {
+            return true;
         }
     }
 
-    return broken;
+    return false;
 }
 
+//
+// FIXME #4572 each_path should be removed
+//
 #[cfg(stage0)]
 pub fn each_path(intr: @ident_interner, cdata: cmd,
                  get_crate_data: GetCrateDataCb,
                  f: &fn(&str, def_like) -> bool) {
     _each_path(intr, cdata, get_crate_data, f);
 }
+
 #[cfg(not(stage0))]
 pub fn each_path(intr: @ident_interner, cdata: cmd,
                  get_crate_data: GetCrateDataCb,
