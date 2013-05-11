@@ -1161,20 +1161,6 @@ pub fn get_crate_vers(data: @~[u8]) -> @~str {
     }
 }
 
-fn iter_crate_items(intr: @ident_interner, cdata: cmd,
-                    get_crate_data: GetCrateDataCb,
-                    proc: &fn(path: &str, ast::def_id)) {
-    for each_path(intr, cdata, get_crate_data) |path_string, def_like| {
-        match def_like {
-            dl_impl(*) | dl_field => {}
-            dl_def(def) => {
-                proc(path_string,
-                     ast_util::def_id_of_def(def))
-            }
-        }
-    }
-}
-
 pub fn list_crate_metadata(intr: @ident_interner, bytes: @~[u8],
                            out: @io::Writer) {
     let hash = get_crate_hash(bytes);
